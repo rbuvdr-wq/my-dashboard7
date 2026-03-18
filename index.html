@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vadodara Region Sahastraveer Live Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; transition: all 0.5s ease; min-height: 100vh; margin: 0; }
+        .light { background: linear-gradient(135deg, #ff4d4d, #f9d423); color: #1a1a1a; }
+        .dark { background: linear-gradient(135deg, #0f172a, #020617); color: #f8fafc; }
+        .glass { 
+            backdrop-filter: blur(20px) saturate(160%);
+            -webkit-backdrop-filter: blur(20px) saturate(160%);
+            background-color: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        }
+        .dark .glass { background-color: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .neon-glow { text-shadow: 0 0 8px rgba(99, 102, 241, 0.6); }
+        .mobile-view { max-width: 450px; margin: 0 auto; border-left: 2px solid rgba(255,255,255,0.1); border-right: 2px solid rgba(255,255,255,0.1); }
+        .num-cell:hover { color: #818cf8; cursor: pointer; transform: scale(1.1); transition: transform 0.2s; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+    </style>
+</head>
+<body class="dark">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTR0BS2v9BdTO7UEMqCKnyVaODomy0v6hzPFgOfHb7x6aiPBu4MAp2vWd0TkASlM6ukAb1ePScz3v6s/pub?gid=0&single=true&output=csv";
+
+        const App = () => {
+            const [rawData, setRawData] = useState([]);
+            const [lastUpdated, setLastUpdated] = useState(new Date());
+            const [countdown, setCountdown] = useState(60);
+            const [isDarkMode, setIsDarkMode] = useState(true);
+            const [isMobile, setIsMobile] = useState(false);
+            const [tableView, setTableView] = useState('Division'); 
+            const [expandedRows, setExpandedRows] = useState({});
+            const [filters, setFilters] = useState({ div: '', sub: '', so: '', bo: '' });
+
+            // Helper for Data Normalization
+            const clean = (val) => (val || "").toString().trim().toUpperCase();
+
+            const fetchData = () => {
+                Papa.parse(CSV_URL, {
+                    download: true, header: true, skipEmptyLines: true,
+                    complete: (results) => {
+                        // Data sanitization layer
+                        const sanitized = results.data.map(row => {
+                            const newRow = {};
+                            Object.keys(row).forEach(key => {
+                                const cleanKey = key.trim();
+                                newRow[cleanKey] = row[key] ? row[key].toString().trim() : "";
+                            });
+                            return newRow;
+                        });
+                        setRawData(sanitized);
+                        setLastUpdated(new Date());
+                        setCountdown(60);
+                    }
+                });
+            };
+
+            useEffect(() => {
+                fetchData();
+                const timer = setInterval(() => setCountdown(c => c > 1 ? c - 1 : (fetchData(), 60)), 1000);
+                return () => clearInterval(timer);
+            }, []);
+
+            const exportExcel = (data, name) => {
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Dashboard_Data");
+                XLSX.writeFile(wb, `${name.replace(/\s+/g, '_')}_Report.xlsx`);
+            };
+
+            const getStats = (items) => {
+                const dormant = items.filter(r => clean(r.Milestone) === 'DORMANT BO').length;
+                const oop = items.filter(r => clean(r.Milestone) === 'OOP-SAHASTRAVEER').length;
+                const potential = items.filter(r => clean(r.Milestone) === 'POTENTIAL SAHASTRAVEER').length;
+                const sahastra = items.filter(r => clean(r.Milestone) === 'SAHASTRAVEER').length;
+                
+                const total = dormant + oop + potential + sahastra;
+                const netOop = oop + potential + sahastra;
+                
+                return {
+                    dormant, oop, potential, sahastra, total, netOop,
+                    pNetOop: ((netOop/total)*100 || 0).toFixed(2),
+                    pSahastra: ((sahastra/total)*100 || 0).toFixed(2)
+                };
+            };
+
+            const tableRows = useMemo(() => {
+                const key = tableView === 'Division' ? 'Division_Name' : 'Subdivision_Name';
+                const grouped = {};
+                rawData.forEach(row => {
+                    const groupVal = row[key];
+                    if (!groupVal) return;
+                    if (!grouped[groupVal]) grouped[groupVal] = [];
+                    grouped[groupVal].push(row);
+                });
+
+                return Object.entries(grouped).map(([name, rows]) => ({
+                    name, rows, ...getStats(rows)
+                })).sort((a, b) => b.pSahastra - a.pSahastra || b.pNetOop - a.pNetOop);
+            }, [rawData, tableView]);
+
+            const kpiCols = [
+                'POSB', 'SBPRM', 'Seeding_linkage', 'GI_Premium', 'PLI_RPLI_Premium', 
+                'Mails_booking', 'Mails_booking_count', 'Connections', 'POSB_Pending', 
+                'SBPRM_Pending', 'Seeding_Linkage_Pending', 'GI_Premium_Pending', 
+                'PLI_RPLI_Pending', 'Mails_booking_Pending', 'Mails_booking_count_Pending', 'Connections_Pending'
+            ];
+
+            const filteredPartB = useMemo(() => {
+                return rawData.filter(d => 
+                    (!filters.div || clean(d.Division_Name) === clean(filters.div)) &&
+                    (!filters.sub || clean(d.Subdivision_Name) === clean(filters.sub)) &&
+                    (!filters.so || clean(d.SO_Name) === clean(filters.so)) &&
+                    (!filters.bo || clean(d.BO_Name) === clean(filters.bo))
+                );
+            }, [rawData, filters]);
+
+            return (
+                <div className={`min-h-screen pb-12 transition-all duration-700 ${isDarkMode ? 'dark' : 'light'} ${isMobile ? 'mobile-view' : ''}`}>
+                    
+                    {/* Floating Nav Header */}
+                    <div className="sticky top-0 z-50 p-4">
+                        <header className="glass p-5 flex flex-col md:flex-row justify-between items-center gap-4 rounded-2xl border border-white/20">
+                            <div>
+                                <h1 className="text-2xl font-black neon-glow tracking-tight uppercase">Vadodara Region Sahastraveer</h1>
+                                <div className="flex items-center gap-2 text-xs font-bold opacity-80">
+                                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                                    LIVE UPDATING IN: {countdown}s | LAST: {lastUpdated.toLocaleTimeString()}
+                                </div>
+                            </div>
+                            <div className="flex bg-black/20 p-1 rounded-xl gap-1">
+                                <button onClick={() => setIsDarkMode(!isDarkMode)} className="px-4 py-2 rounded-lg text-[10px] font-bold uppercase transition hover:bg-white/10">
+                                    {isDarkMode ? '🌙 DARK' : '☀️ LIGHT'}
+                                </button>
+                                <button onClick={() => setIsMobile(!isMobile)} className="px-4 py-2 rounded-lg text-[10px] font-bold uppercase transition hover:bg-white/10">
+                                    {isMobile ? '📱 MOBILE' : '💻 DESKTOP'}
+                                </button>
+                            </div>
+                        </header>
+                    </div>
+
+                    <main className="px-4 md:px-8 space-y-8">
+                        {/* Part A */}
+                        <section className="glass p-6 rounded-3xl">
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                                <div className="flex flex-col gap-2">
+                                    <h2 className="text-xl font-bold flex items-center gap-2">📊 Statistics Panel</h2>
+                                    <div className="flex bg-white/5 rounded-lg p-1 border border-white/10">
+                                        <button onClick={() => setTableView('Division')} className={`px-4 py-1.5 rounded-md text-[10px] font-bold transition ${tableView === 'Division' ? 'bg-indigo-600 text-white' : 'opacity-50'}`}>DIVISION</button>
+                                        <button onClick={() => setTableView('Subdivision')} className={`px-4 py-1.5 rounded-md text-[10px] font-bold transition ${tableView === 'Subdivision' ? 'bg-indigo-600 text-white' : 'opacity-50'}`}>SUB-DIVISION</button>
+                                    </div>
+                                </div>
+                                <button onClick={() => exportExcel(rawData, "Vadodara_Region_Master")} className="w-full md:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black shadow-xl transition-all active:scale-95 uppercase tracking-widest">
+                                    📥 Export Full Table
+                                </button>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-separate border-spacing-y-3">
+                                    <thead>
+                                        <tr className="text-[10px] uppercase tracking-widest opacity-60">
+                                            <th className="px-4">#</th>
+                                            <th className="px-4">{tableView}</th>
+                                            <th className="px-2 text-center">Dormant</th>
+                                            <th className="px-2 text-center">Oop</th>
+                                            <th className="px-2 text-center">Potential</th>
+                                            <th className="px-2 text-center">Sahastraveer</th>
+                                            <th className="px-2 text-center">Total</th>
+                                            <th className="px-2 text-center">Net Oop</th>
+                                            <th className="px-2 text-center text-indigo-400">% Sahastra</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {tableRows.map((row, idx) => (
+                                            <React.Fragment key={row.name}>
+                                                <tr className="bg-white/5 hover:bg-white/10 transition-all rounded-xl">
+                                                    <td className="p-4 rounded-l-xl font-black opacity-30">{idx + 1}</td>
+                                                    <td className="p-4 font-bold cursor-pointer text-indigo-400" onClick={() => setExpandedRows({...expandedRows, [row.name]: !expandedRows[row.name]})}>
+                                                        {expandedRows[row.name] ? '▼ ' : '▶ '} {row.name}
+                                                    </td>
+                                                    {[row.dormant, row.oop, row.potential, row.sahastra, row.total, row.netOop].map((num, i) => (
+                                                        <td key={i} className="p-4 text-center font-mono font-bold num-cell" onClick={() => exportExcel(row.rows, row.name)}>{num}</td>
+                                                    ))}
+                                                    <td className="p-4 text-center rounded-r-xl font-black text-green-400" onClick={() => exportExcel(row.rows, row.name)}>{row.pSahastra}%</td>
+                                                </tr>
+                                                {expandedRows[row.name] && (
+                                                    <tr>
+                                                        <td colSpan="9" className="p-4 animate-fadeIn">
+                                                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                                                                {[...new Set(row.rows.map(r => r.SO_Name))].map(so => (
+                                                                    <div key={so} onClick={() => exportExcel(row.rows.filter(x => x.SO_Name === so), so)} className="p-3 bg-black/20 border border-white/5 rounded-lg text-[10px] flex justify-between items-center cursor-pointer hover:border-indigo-500">
+                                                                        <span className="truncate mr-2">{so}</span>
+                                                                        <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-400 rounded-md">{row.rows.filter(x => x.SO_Name === so).length}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </React.Fragment>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+
+                        {/* Part B */}
+                        <section className="glass p-6 rounded-3xl">
+                            <h2 className="text-xl font-bold mb-6 flex items-center gap-2">🔍 Hierarchical Explorer</h2>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                                <select className="bg-black/40 p-4 rounded-xl border border-white/10 outline-none focus:border-indigo-500 transition" value={filters.div} onChange={(e) => setFilters({div: e.target.value, sub:'', so:'', bo:''})}>
+                                    <option value="">Select Division</option>
+                                    {[...new Set(rawData.map(d => d.Division_Name))].filter(Boolean).sort().map(d => <option key={d}>{d}</option>)}
+                                </select>
+                                <select className="bg-black/40 p-4 rounded-xl border border-white/10 outline-none focus:border-indigo-500 disabled:opacity-30 transition" disabled={!filters.div} value={filters.sub} onChange={(e) => setFilters({...filters, sub: e.target.value, so:'', bo:''})}>
+                                    <option value="">Select Subdivision</option>
+                                    {[...new Set(rawData.filter(d => clean(d.Division_Name) === clean(filters.div)).map(d => d.Subdivision_Name))].filter(Boolean).sort().map(d => <option key={d}>{d}</option>)}
+                                </select>
+                                <select className="bg-black/40 p-4 rounded-xl border border-white/10 outline-none focus:border-indigo-500 disabled:opacity-30 transition" disabled={!filters.sub} value={filters.so} onChange={(e) => setFilters({...filters, so: e.target.value, bo:''})}>
+                                    <option value="">Select SO</option>
+                                    {[...new Set(rawData.filter(d => clean(d.Subdivision_Name) === clean(filters.sub)).map(d => d.SO_Name))].filter(Boolean).sort().map(d => <option key={d}>{d}</option>)}
+                                </select>
+                                <select className="bg-black/40 p-4 rounded-xl border border-white/10 outline-none focus:border-indigo-500 disabled:opacity-30 transition" disabled={!filters.so} value={filters.bo} onChange={(e) => setFilters({...filters, bo: e.target.value})}>
+                                    <option value="">Select BO</option>
+                                    {[...new Set(rawData.filter(d => clean(d.SO_Name) === clean(filters.so)).map(d => d.BO_Name))].filter(Boolean).sort().map(d => <option key={d}>{d}</option>)}
+                                </select>
+                            </div>
+
+                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                                {kpiCols.map(col => {
+                                    const sum = filteredPartB.reduce((acc, curr) => acc + (parseFloat(curr[col]) || 0), 0);
+                                    return (
+                                        <div key={col} className="p-5 glass border-t-2 border-indigo-500/50 rounded-2xl hover:bg-white/5 transition group">
+                                            <div className="text-[9px] uppercase font-black tracking-widest opacity-50 group-hover:text-indigo-400 transition mb-2">{col.replace(/_/g, ' ')}</div>
+                                            <div className="text-2xl font-mono font-bold">{sum.toLocaleString()}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
